@@ -11,21 +11,28 @@
 
 main(Args) ->
     Opts = parse_opts(Args),
-    do_compile(proplists:get_value(sources, Opts),
-               [ proplists:get_value(output, Opts),
-                 verbose, report_errors, report_warnings,
-                 debug_info,warn_unused_import,warn_obsolete_guard,
-                 warn_export_all |
-                 proplists:get_value(includes, Opts) ]),
-    load_modules(Opts),
+    do_compile(proplists:get_value(sources, Opts), Opts),
     run_tests(Opts).
 
 do_compile([], _) ->
     io:format("Compilation is successful.");
 do_compile([Source | Rest], Options) ->
 %%    io:format("Compiling~p~nWith options:~p~n", [Source, Options]),
-    case compile:file(Source, Options) of
+  Node = proplists:get_value(node, Options),
+  io:format("Node:~p", [Node]),
+  Cookie = proplists:get_value(cookie, Options),
+  erlang:set_cookie(node(), Cookie),
+  Module = list_to_atom(filename:basename(Source, ".erl")),
+  OutputDir = get_module_beam_dir(Node, Module),
+  io:format("OutputDir:~p", [OutputDir]),
+  CompileOptions = [{outdir, OutputDir},
+                    verbose, report_errors, report_warnings,
+                    debug_info, warn_unused_import, warn_obsolete_guard,
+                    warn_export_all |
+                    proplists:get_value(includes, Options) ],
+    case compile:file(Source, CompileOptions) of
         {ok, _} ->
+            load_a_module(Node, Module),
             do_compile(Rest, Options);
         Else ->
             err("Error:~p", [Else])
@@ -51,11 +58,11 @@ parse_opts(["--p", Env | Rest], Result) ->
 parse_opts(Sources, Result) ->
     [{sources, Sources} | Result].
 
-load_modules(Opts) ->
-    erlang:set_cookie(node(), proplists:get_value(cookie, Opts)),
-    Node = proplists:get_value(node, Opts),
-    Result = rpc:call(Node, user_default, lm, []),
-    io:format("Loaded modules into node '~p' : ~p~n", [Node, Result]).
+load_a_module(Node, Module) ->
+  io:format("NODE:~p, Module:~p", [Node, Module]),
+    Result = rpc:call(Node, c, l, [Module]),
+    io:format("Loaded module into node '~p' : ~p~n", [Node, Result]),
+  Result.
 
 run_tests(Opts) ->
   Node = proplists:get_value(node, Opts),
@@ -83,3 +90,18 @@ err(Msg, Args) ->
    io:format(Msg, Args),
    erlang:halt(1).
 
+get_module_beam_dir(Node, Module) ->
+  io:format("GET Object Code Returns:~p", [{Module,code:get_object_code(Module)}]),
+  case rpc:call(Node, code, get_object_code, [Module]) of
+    {Module, _Binary, FileName} ->
+      io:format("Beam File Name:~p", [FileName]),
+      filename:dirname(FileName);
+    error ->
+      case load_a_module(Node, Module) of
+        {module, Module} ->
+          get_module_beam_dir(Node, Module);
+        Else ->
+          io:format("get:~p", [Else]),
+          Else
+      end
+  end.
